@@ -1,0 +1,6 @@
+{
+  "name": "Minecraft 3D - 方塊沙盒世界",
+  "description": "3D 像素方塊沙盒遊戲：全新市集每月 10NT 創世 VIP 會員、萬界融合新動態世界地形、精緻人物造型統一售價 1000 積分，支援 Gemini AI 導覽與存檔。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

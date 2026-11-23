@@ -1,0 +1,195 @@
+{
+  "entities": {
+    "Feedback": {
+      "title": "Feedback",
+      "description": "Player-submitted feedback, suggestions, or bug reports directed to admin ruiqishi59@gmail.com.",
+      "type": "object",
+      "properties": {
+        "senderUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Authenticated Firebase UID of the player submitting feedback."
+        },
+        "senderName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Display name of the sender."
+        },
+        "senderEmail": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Verified email address of the sender."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["suggestion", "bug", "balance", "other"],
+          "maxLength": 20,
+          "description": "Feedback category."
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Feedback subject line."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "Detailed feedback content."
+        },
+        "deviceType": {
+          "type": "string",
+          "enum": ["tablet", "mobile", "desktop"],
+          "maxLength": 20,
+          "description": "Device category from which the player sent the feedback."
+        },
+        "emailedToAdmin": {
+          "type": "boolean",
+          "description": "Whether an email copy was sent to ruiqishi59@gmail.com."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["unread", "read", "replied"],
+          "maxLength": 20,
+          "description": "Admin review status."
+        },
+        "adminReply": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Reply text written by admin ruiqishi59@gmail.com."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when feedback was submitted."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when feedback was last updated."
+        }
+      },
+      "required": [
+        "senderUid",
+        "senderName",
+        "senderEmail",
+        "category",
+        "subject",
+        "message",
+        "deviceType",
+        "emailedToAdmin",
+        "status",
+        "adminReply",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MailboxMessage": {
+      "title": "MailboxMessage",
+      "description": "In-game mailbox messages and announcements sent exclusively by admin ruiqishi59@gmail.com.",
+      "type": "object",
+      "properties": {
+        "recipientType": {
+          "type": "string",
+          "enum": ["direct", "broadcast"],
+          "maxLength": 20,
+          "description": "Whether the message targets a specific player or all players."
+        },
+        "recipientUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$",
+          "description": "Target user UID (or 'ALL' for broadcasts, or empty string if addressed by email)."
+        },
+        "recipientEmail": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Target user email (or 'ALL' for broadcasts)."
+        },
+        "senderEmail": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Verified admin email (ruiqishi59@gmail.com)."
+        },
+        "senderName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Sender display name."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Mailbox message title."
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "Mailbox message content."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["system", "reply", "direct", "reward"],
+          "maxLength": 20,
+          "description": "Message classification."
+        },
+        "relatedFeedbackId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]*$",
+          "description": "Optional related feedback document ID."
+        },
+        "isRead": {
+          "type": "boolean",
+          "description": "Read flag for direct messages."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when mailbox message was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when mailbox message was last updated."
+        }
+      },
+      "required": [
+        "recipientType",
+        "recipientUid",
+        "recipientEmail",
+        "senderEmail",
+        "senderName",
+        "title",
+        "body",
+        "type",
+        "relatedFeedbackId",
+        "isRead",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/feedbacks/{feedbackId}": {
+      "schema": {
+        "$ref": "#/entities/Feedback"
+      },
+      "description": "Player feedback submissions, readable by the author or admin (ruiqishi59@gmail.com) and manageable exclusively by admin."
+    },
+    "/mailbox/{messageId}": {
+      "schema": {
+        "$ref": "#/entities/MailboxMessage"
+      },
+      "description": "In-game mailbox messages and broadcasts; only admin (ruiqishi59@gmail.com) can compose/send messages."
+    }
+  }
+}
