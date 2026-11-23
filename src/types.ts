@@ -218,6 +218,7 @@ export interface WorldSaveData {
     gameMode?: 'survival' | 'creative';
   };
   modifiedBlocks: { [coordKey: string]: BlockType };
+  cloudSynced?: boolean;
 }
 
 export interface GameSettings {

@@ -24,13 +24,15 @@ import { VipModal } from './VipModal';
 import { AIGuideModal } from './AIGuideModal';
 import { GoogleAccountModal } from './GoogleAccountModal';
 import { MailboxModal } from './MailboxModal';
+import { LoginScreen } from './LoginScreen';
 import { worldStorage } from '../game/worldStorage';
 import { WeatherType, WorldSaveData, PlayerStats, GameSettings, MobEntity, BiomeType } from '../types';
 import { calculateBlockMining, getBlockDisplayName } from '../game/mining';
 import { DynamicWorldFXManager } from '../game/dynamicWorldFX';
-import { isVipActive, loginWithGoogleAccount } from '../utils/googleAuth';
-import { detectTouchOrTabletDevice } from '../utils/device';
-import { subscribeAuthState } from '../firebase';
+import { isVipActive, loginWithGoogleAccount, logoutGoogleAccount } from '../utils/googleAuth';
+import { detectTouchOrTabletDevice, getDeviceCategory } from '../utils/device';
+import { auth, ensureUserSecurityProfile, isVerifiedGoogleUser, saveWorldToCloud, subscribeAuthState } from '../firebase';
+import { User } from 'firebase/auth';
 import { Play, Smartphone, Monitor } from 'lucide-react';
 
 export const GameCanvas: React.FC = () => {
@@ -58,16 +60,31 @@ export const GameCanvas: React.FC = () => {
     return () => window.removeEventListener('touchstart', handleFirstTouch);
   }, []);
 
-  // Keep Firebase Google Auth profile synced with local profile store
+  // Firebase Authentication & Login Screen State
+  const [authReady, setAuthReady] = useState(false);
+  const [authUser, setAuthUser] = useState<User | null>(() => auth.currentUser);
+  const [showLoginScreen, setShowLoginScreen] = useState(true);
+  const guestDismissedRef = useRef(false);
+
+  // Keep verified Firebase Google Auth profile strictly synced in memory (clear on sign out)
   useEffect(() => {
     const unsub = subscribeAuthState((fbUser) => {
-      if (fbUser && fbUser.email) {
+      setAuthReady(true);
+      setAuthUser(fbUser);
+      if (fbUser && isVerifiedGoogleUser(fbUser) && fbUser.email) {
         loginWithGoogleAccount({
           id: fbUser.uid,
           email: fbUser.email,
           name: fbUser.displayName || fbUser.email.split('@')[0] || '冒險家',
           avatar: fbUser.photoURL || undefined
         });
+        ensureUserSecurityProfile(fbUser, getDeviceCategory()).catch(() => {});
+        setShowLoginScreen(false);
+      } else {
+        logoutGoogleAccount();
+        if (!guestDismissedRef.current) {
+          setShowLoginScreen(true);
+        }
       }
     });
     return unsub;
@@ -172,6 +189,7 @@ export const GameCanvas: React.FC = () => {
       isAIGuideOpen ||
       isGoogleAccountOpen ||
       isMailboxOpen ||
+      showLoginScreen ||
       isTerrainLoading;
     isPausedRef.current = paused;
 
@@ -196,6 +214,7 @@ export const GameCanvas: React.FC = () => {
     isAIGuideOpen,
     isGoogleAccountOpen,
     isMailboxOpen,
+    showLoginScreen,
     isTerrainLoading,
     isMobileMode
   ]);
@@ -1027,7 +1046,7 @@ export const GameCanvas: React.FC = () => {
       return;
     }
 
-    if (isMainMenu || isDead) return;
+    if (isMainMenu || isDead || showLoginScreen) return;
 
     // In mobile mode, physical mouse clicks don't force pointer lock
     if (isMobileMode) return;
@@ -1044,7 +1063,7 @@ export const GameCanvas: React.FC = () => {
       placingStateRef.current.cooldownTimer = 0.22;
       executePlaceOrUse();
     }
-  }, [isMainMenu, isDead, isMobileMode, handleStartMiningOrAttack, executePlaceOrUse]);
+  }, [isMainMenu, isDead, showLoginScreen, isMobileMode, handleStartMiningOrAttack, executePlaceOrUse]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (e.button === 0) {
@@ -1396,6 +1415,20 @@ export const GameCanvas: React.FC = () => {
 
     worldStorage.saveWorld(saved);
     setCurrentWorld(saved);
+
+    // Sync world save securely to Firestore when authenticated via Google OAuth
+    const currentFbUser = auth.currentUser;
+    if (currentFbUser && isVerifiedGoogleUser(currentFbUser)) {
+      saveWorldToCloud(currentFbUser, saved, getDeviceCategory())
+        .then((syncedWorld) => {
+          worldStorage.saveWorld(syncedWorld);
+          setCurrentWorld((prev) => (prev && prev.id === syncedWorld.id ? syncedWorld : prev));
+        })
+        .catch((err) => {
+          console.warn('Cloud world auto-sync warning:', err);
+        });
+    }
+
     return saved;
   };
 
@@ -1502,7 +1535,7 @@ export const GameCanvas: React.FC = () => {
         />
       )}
 
-      {/* Main Menu (Blocky Title Screen with Marketplace, Mailbox, 3D character on right) */}
+      {/* Main Menu (Blocky Title Screen with Marketplace, Mailbox, Auth, 3D character on right) */}
       {isMainMenu && (
         <MainMenu
           onOpenWorldSelect={() => setIsWorldSelectOpen(true)}
@@ -1510,8 +1543,31 @@ export const GameCanvas: React.FC = () => {
           onOpenSkins={() => setIsSkinSelectOpen(true)}
           onOpenMarket={() => setIsMarketOpen(true)}
           onOpenMailbox={() => setIsMailboxOpen(true)}
+          onOpenAuth={() => {
+            if (isVerifiedGoogleUser(authUser)) {
+              setIsGoogleAccountOpen(true);
+            } else {
+              setShowLoginScreen(true);
+            }
+          }}
+          authUser={authUser}
           mailboxUnreadCount={mailboxUnreadCount}
           skinId={gameSettings.skinId}
+        />
+      )}
+
+      {/* Firebase Authentication Login Screen (Google OAuth + Guest fallback) */}
+      {showLoginScreen && (
+        <LoginScreen
+          authReady={authReady}
+          onLoginSuccess={() => {
+            guestDismissedRef.current = true;
+            setShowLoginScreen(false);
+          }}
+          onContinueGuest={() => {
+            guestDismissedRef.current = true;
+            setShowLoginScreen(false);
+          }}
         />
       )}
 
@@ -1526,7 +1582,7 @@ export const GameCanvas: React.FC = () => {
       )}
 
       {/* Mobile & Tablet Touch Virtual Joystick & Action Buttons Overlay */}
-      {!isMainMenu && !isDead && isMobileMode && !isInventoryOpen && !isCraftingOpen && !isHelpOpen && !isDriveOpen && !isPauseOpen && !isSettingsOpen && !isSkinSelectOpen && !isTradeOpen && !isMarketOpen && !isVipOpen && !isAIGuideOpen && !isGoogleAccountOpen && !isMailboxOpen && !isTerrainLoading && (
+      {!isMainMenu && !isDead && isMobileMode && !showLoginScreen && !isInventoryOpen && !isCraftingOpen && !isHelpOpen && !isDriveOpen && !isPauseOpen && !isSettingsOpen && !isSkinSelectOpen && !isTradeOpen && !isMarketOpen && !isVipOpen && !isAIGuideOpen && !isGoogleAccountOpen && !isMailboxOpen && !isTerrainLoading && (
         <MobileControls
           player={playerRef.current}
           world={worldRef.current}
@@ -1552,7 +1608,7 @@ export const GameCanvas: React.FC = () => {
       )}
 
       {/* Start / Resume Click Overlay for Desktop mode when not locked (rendered at z-20 so HUD at z-40 remains clickable) */}
-      {!isMainMenu && !isDead && !isMobileMode && !isPointerLocked && !isInventoryOpen && !isCraftingOpen && !isHelpOpen && !isDriveOpen && !isPauseOpen && !isSettingsOpen && !isSkinSelectOpen && !isTradeOpen && !isMarketOpen && !isVipOpen && !isAIGuideOpen && !isGoogleAccountOpen && !isMailboxOpen && !isTerrainLoading && (
+      {!isMainMenu && !isDead && !isMobileMode && !isPointerLocked && !showLoginScreen && !isInventoryOpen && !isCraftingOpen && !isHelpOpen && !isDriveOpen && !isPauseOpen && !isSettingsOpen && !isSkinSelectOpen && !isTradeOpen && !isMarketOpen && !isVipOpen && !isAIGuideOpen && !isGoogleAccountOpen && !isMailboxOpen && !isTerrainLoading && (
         <div
           onClick={(e) => {
             const target = e.target as HTMLElement;
@@ -1647,6 +1703,15 @@ export const GameCanvas: React.FC = () => {
           setIsPauseOpen(false);
           setIsMailboxOpen(true);
         }}
+        onOpenGoogleAccount={() => {
+          setIsPauseOpen(false);
+          if (isVerifiedGoogleUser(authUser)) {
+            setIsGoogleAccountOpen(true);
+          } else {
+            setShowLoginScreen(true);
+          }
+        }}
+        isCloudSignedIn={isVerifiedGoogleUser(authUser)}
         mailboxUnreadCount={mailboxUnreadCount}
         onSwitchDimension={() => handleSwitchDimension()}
         currentDimension={currentDimension}
@@ -1733,6 +1798,7 @@ export const GameCanvas: React.FC = () => {
         isOpen={isWorldSelectOpen}
         onClose={() => setIsWorldSelectOpen(false)}
         onSelectWorld={handleSelectAndLoadWorld}
+        onOpenLogin={() => setShowLoginScreen(true)}
       />
 
       <InventoryModal
@@ -1791,6 +1857,7 @@ export const GameCanvas: React.FC = () => {
         }}
         onSaveWorld={handleSaveWorld}
         onLoadWorld={handleLoadWorld}
+        onOpenGoogleAccount={() => setShowLoginScreen(true)}
       />
 
       {/* 方塊市集 (Marketplace: VIP每月10NT, 精緻造型統一1000點, 儲值100~10000點) */}

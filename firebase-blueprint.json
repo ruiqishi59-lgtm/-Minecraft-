@@ -1,5 +1,204 @@
 {
   "entities": {
+    "UserSecurityProfile": {
+      "title": "UserSecurityProfile",
+      "description": "Per-user account security preferences and last verified session metadata.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Authenticated Firebase UID."
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Verified Google email address."
+        },
+        "autoLockMinutes": {
+          "type": "integer",
+          "description": "Inactivity minutes before clearing in-memory OAuth token (0, 5, 10, 30)."
+        },
+        "requireReauthForSensitiveActions": {
+          "type": "boolean",
+          "description": "Whether sensitive account actions require fresh Google re-authentication."
+        },
+        "lastVerifiedDevice": {
+          "type": "string",
+          "enum": ["tablet", "mobile", "desktop"],
+          "maxLength": 20,
+          "description": "Device category of last verified sign-in."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when security profile was initialized."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when security profile was last updated."
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "autoLockMinutes",
+        "requireReauthForSensitiveActions",
+        "lastVerifiedDevice",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SecurityLog": {
+      "title": "SecurityLog",
+      "description": "Append-only, tamper-evident security activity log for account protection.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Authenticated Firebase UID of the account owner."
+        },
+        "eventType": {
+          "type": "string",
+          "enum": [
+            "sign_in",
+            "reauth_verified",
+            "gmail_send",
+            "admin_mail",
+            "token_revoked",
+            "settings_updated",
+            "world_cloud_save",
+            "world_cloud_delete"
+          ],
+          "maxLength": 32,
+          "description": "Type of security event."
+        },
+        "deviceType": {
+          "type": "string",
+          "enum": ["tablet", "mobile", "desktop"],
+          "maxLength": 20,
+          "description": "Device category from which the action occurred."
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Short non-sensitive event summary."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when event occurred."
+        }
+      },
+      "required": [
+        "uid",
+        "eventType",
+        "deviceType",
+        "detail",
+        "createdAt"
+      ]
+    },
+    "WorldSave": {
+      "title": "WorldSave",
+      "description": "Authenticated user's voxel world save stored securely in Firestore.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique world document identifier."
+        },
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner Firebase Auth UID."
+        },
+        "version": {
+          "type": "integer",
+          "description": "Save format schema version."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Player-chosen world title."
+        },
+        "gameMode": {
+          "type": "string",
+          "enum": ["survival", "creative"],
+          "maxLength": 20,
+          "description": "Active game mode."
+        },
+        "difficulty": {
+          "type": "string",
+          "enum": ["peaceful", "easy", "normal", "hard"],
+          "maxLength": 20,
+          "description": "World difficulty level."
+        },
+        "worldType": {
+          "type": "string",
+          "enum": ["default", "flat", "mountains", "heaven", "fusion"],
+          "maxLength": 20,
+          "description": "World generator type."
+        },
+        "seed": {
+          "type": "integer",
+          "description": "Terrain generation seed."
+        },
+        "timeOfDay": {
+          "type": "number",
+          "description": "Normalized time of day (0.0 to 1.0)."
+        },
+        "weather": {
+          "type": "string",
+          "enum": ["clear", "rain", "thunder"],
+          "maxLength": 20,
+          "description": "Current weather state."
+        },
+        "player": {
+          "type": "object",
+          "description": "Player position, orientation, stats, and 36-slot inventory."
+        },
+        "modifiedBlocks": {
+          "type": "object",
+          "description": "Map of coordinate keys ('x,y,z') to BlockType strings."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when world cloud save was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when world cloud save was last updated."
+        }
+      },
+      "required": [
+        "id",
+        "uid",
+        "version",
+        "name",
+        "gameMode",
+        "difficulty",
+        "worldType",
+        "seed",
+        "timeOfDay",
+        "weather",
+        "player",
+        "modifiedBlocks",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
     "Feedback": {
       "title": "Feedback",
       "description": "Player-submitted feedback, suggestions, or bug reports directed to admin ruiqishi59@gmail.com.",
@@ -179,6 +378,24 @@
     }
   },
   "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserSecurityProfile"
+      },
+      "description": "Per-user security profile & session protection preferences; strictly owner-only access with Google Sign-In."
+    },
+    "/users/{userId}/security_logs/{logId}": {
+      "schema": {
+        "$ref": "#/entities/SecurityLog"
+      },
+      "description": "Append-only tamper-evident account security activity log; strictly owner-only read/create, never update/delete."
+    },
+    "/users/{userId}/worlds/{worldId}": {
+      "schema": {
+        "$ref": "#/entities/WorldSave"
+      },
+      "description": "Authenticated user's personal voxel world saves; strictly owner-only read/write via verified Google Sign-In."
+    },
     "/feedbacks/{feedbackId}": {
       "schema": {
         "$ref": "#/entities/Feedback"

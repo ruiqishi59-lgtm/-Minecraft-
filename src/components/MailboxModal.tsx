@@ -37,7 +37,10 @@ import {
   auth,
   db,
   ensureGmailSendToken,
+  ensureUserSecurityProfile,
   isAdminUser,
+  isVerifiedGoogleUser,
+  logSecurityEvent,
   signInWithGoogleFirebase,
   subscribeAuthState,
   OperationType,
@@ -193,9 +196,9 @@ export const MailboxModal: React.FC<MailboxModalProps> = ({
     return unsub;
   }, []);
 
-  // Subscribe to Mailbox messages when authenticated & verified
+  // Subscribe to Mailbox messages when authenticated & verified via Google
   useEffect(() => {
-    if (!fbUser || !fbUser.emailVerified) return;
+    if (!fbUser || !isVerifiedGoogleUser(fbUser)) return;
 
     const buckets: Record<string, Map<string, MailboxDoc>> = {
       broadcast: new Map(),
@@ -313,7 +316,7 @@ export const MailboxModal: React.FC<MailboxModalProps> = ({
 
   // Subscribe to player's own feedbacks & admin all feedbacks
   useEffect(() => {
-    if (!fbUser || !fbUser.emailVerified) return;
+    if (!fbUser || !isVerifiedGoogleUser(fbUser)) return;
 
     const toFeedback = (d: { id: string; data: () => Record<string, unknown> }): FeedbackDoc => {
       const data = d.data();
@@ -499,7 +502,7 @@ export const MailboxModal: React.FC<MailboxModalProps> = ({
 
       const fbRef = doc(collection(db, 'feedbacks'));
       const senderName = (currentUser.displayName || currentUser.email.split('@')[0] || '冒險家').slice(0, 64);
-      const senderEmail = currentUser.email.slice(0, 160);
+      const senderEmail = currentUser.email.trim().toLowerCase().slice(0, 160);
 
       let emailSentSuccess = false;
       if (withEmail && accessToken) {
@@ -534,6 +537,16 @@ export const MailboxModal: React.FC<MailboxModalProps> = ({
         handleFirestoreError(err, OperationType.CREATE, `feedbacks/${fbRef.id}`);
       }
 
+      await ensureUserSecurityProfile(currentUser, deviceCategory);
+      await logSecurityEvent(
+        currentUser,
+        'gmail_send',
+        deviceCategory,
+        emailSentSuccess
+          ? `透過意見箱寄送郵件至 ${ADMIN_EMAIL}`
+          : '送出意見箱回饋至雲端信箱'
+      );
+
       setFbSubject('');
       setFbMessage('');
       setPendingFeedbackConfirm(null);
@@ -559,12 +572,18 @@ export const MailboxModal: React.FC<MailboxModalProps> = ({
 
     try {
       const targetEmail =
-        adminComposeMode === 'broadcast' ? 'ALL' : adminRecipientEmail.trim().slice(0, 160);
+        adminComposeMode === 'broadcast'
+          ? 'ALL'
+          : adminRecipientEmail.trim().toLowerCase().slice(0, 160);
       const title = adminMsgTitle.trim().slice(0, 120);
       const body = adminMsgBody.trim().slice(0, 2000);
 
-      if (!title || !body || (adminComposeMode === 'direct' && !targetEmail.includes('@'))) {
-        throw new Error('請填寫有效的收件資訊、標題與內容。');
+      if (
+        !title ||
+        !body ||
+        (adminComposeMode === 'direct' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(targetEmail))
+      ) {
+        throw new Error('請填寫有效的收件 Email 格式、標題與內容。');
       }
 
       const mailRef = doc(collection(db, 'mailbox'));
@@ -586,6 +605,13 @@ export const MailboxModal: React.FC<MailboxModalProps> = ({
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, `mailbox/${mailRef.id}`);
       }
+
+      await logSecurityEvent(
+        fbUser,
+        'admin_mail',
+        deviceCategory,
+        adminComposeMode === 'broadcast' ? '發送全服信箱公告' : `發送私人信件至 ${targetEmail}`
+      );
 
       setAdminMsgTitle('');
       setAdminMsgBody('');
@@ -631,7 +657,7 @@ export const MailboxModal: React.FC<MailboxModalProps> = ({
         await setDoc(mailRef, {
           recipientType: 'direct',
           recipientUid: replyTargetFeedback.senderUid,
-          recipientEmail: replyTargetFeedback.senderEmail,
+          recipientEmail: replyTargetFeedback.senderEmail.trim().toLowerCase(),
           senderEmail: ADMIN_EMAIL,
           senderName: 'Rickie 官方回覆',
           title: `意見回覆：${replyTargetFeedback.subject}`.slice(0, 120),
@@ -645,6 +671,13 @@ export const MailboxModal: React.FC<MailboxModalProps> = ({
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, `mailbox/${mailRef.id}`);
       }
+
+      await logSecurityEvent(
+        fbUser,
+        'admin_mail',
+        deviceCategory,
+        `回覆玩家意見 (${replyTargetFeedback.id})`
+      );
 
       setReplyTargetFeedback(null);
       setAdminReplyText('');

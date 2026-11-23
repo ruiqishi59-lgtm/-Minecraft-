@@ -1,22 +1,55 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { User } from 'firebase/auth';
 import { WorldSaveData, WorldType } from '../types';
 import { worldStorage } from '../game/worldStorage';
-import { Play, Plus, Trash2, Edit3, TreePine, Mountain, Layers, ArrowLeft, Check, Sparkles, Shield, AlertTriangle, Crown } from 'lucide-react';
+import {
+  Play,
+  Plus,
+  Trash2,
+  Edit3,
+  TreePine,
+  Mountain,
+  Layers,
+  ArrowLeft,
+  Check,
+  Sparkles,
+  AlertTriangle,
+  Crown,
+  Cloud,
+  UploadCloud,
+  Lock
+} from 'lucide-react';
 import { VipModal } from './VipModal';
 import { isVipActive } from '../utils/googleAuth';
+import {
+  auth,
+  deleteWorldFromCloud,
+  isVerifiedGoogleUser,
+  renameWorldInCloud,
+  saveWorldToCloud,
+  subscribeAuthState,
+  subscribeCloudWorlds
+} from '../firebase';
+import { getDeviceCategory } from '../utils/device';
 
 interface WorldSelectModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectWorld: (world: WorldSaveData) => void;
+  onOpenLogin?: () => void;
 }
 
 export const WorldSelectModal: React.FC<WorldSelectModalProps> = ({
   isOpen,
   onClose,
-  onSelectWorld
+  onSelectWorld,
+  onOpenLogin
 }) => {
-  const [worlds, setWorlds] = useState<WorldSaveData[]>([]);
+  const [fbUser, setFbUser] = useState<User | null>(() => auth.currentUser);
+  const [localWorlds, setLocalWorlds] = useState<WorldSaveData[]>([]);
+  const [cloudWorlds, setCloudWorlds] = useState<WorldSaveData[]>([]);
+  const [cloudSyncingId, setCloudSyncingId] = useState<string | null>(null);
+  const [cloudNotice, setCloudNotice] = useState<string | null>(null);
   const [selectedWorldId, setSelectedWorldId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState<boolean>(false);
   const [isRenaming, setIsRenaming] = useState<boolean>(false);
@@ -32,15 +65,40 @@ export const WorldSelectModal: React.FC<WorldSelectModalProps> = ({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [isVipModalOpen, setIsVipModalOpen] = useState<boolean>(false);
 
-  // Load worlds
+  const isCloudVerified = isVerifiedGoogleUser(fbUser);
+
+  // Merge cloud worlds and local worlds cleanly (prefer cloud-synced copies)
+  const worlds = useMemo(() => {
+    const mergedMap = new Map<string, WorldSaveData>();
+    localWorlds.forEach((w) => {
+      mergedMap.set(w.id, { ...w, cloudSynced: false });
+    });
+    if (isCloudVerified) {
+      cloudWorlds.forEach((cw) => {
+        mergedMap.set(cw.id, { ...cw, cloudSynced: true });
+      });
+    }
+    return Array.from(mergedMap.values());
+  }, [localWorlds, cloudWorlds, isCloudVerified]);
+
+  // Listen to Firebase Auth state
+  useEffect(() => {
+    const unsub = subscribeAuthState((u) => {
+      setFbUser(u);
+      if (!u) setCloudWorlds([]);
+    });
+    return unsub;
+  }, []);
+
+  // Load local worlds
   const refreshWorlds = () => {
     const list = worldStorage.listWorlds();
-    setWorlds(list);
+    setLocalWorlds(list);
     const lastActive = worldStorage.getLastActiveWorldId();
     if (lastActive && list.some((w) => w.id === lastActive)) {
       setSelectedWorldId(lastActive);
     } else if (list.length > 0) {
-      setSelectedWorldId(list[0].id);
+      setSelectedWorldId((prev) => prev || list[0].id);
     }
   };
 
@@ -50,27 +108,79 @@ export const WorldSelectModal: React.FC<WorldSelectModalProps> = ({
       setIsCreating(false);
       setIsRenaming(false);
       setConfirmDeleteId(null);
+      setCloudNotice(null);
     }
   }, [isOpen]);
+
+  // Subscribe to Firestore cloud worlds when authenticated & modal is open
+  useEffect(() => {
+    if (!isOpen || !fbUser || !isVerifiedGoogleUser(fbUser)) {
+      return;
+    }
+    const unsub = subscribeCloudWorlds(
+      fbUser,
+      (cwList) => {
+        setCloudWorlds(cwList);
+        if (cwList.length > 0) {
+          setSelectedWorldId((prev) => prev || cwList[0].id);
+        }
+      },
+      (err) => {
+        console.warn('Cloud worlds listener warning:', err);
+      }
+    );
+    return unsub;
+  }, [isOpen, fbUser]);
 
   if (!isOpen) return null;
 
   const selectedWorld = worlds.find((w) => w.id === selectedWorldId) || null;
 
+  // Upload a local-only world to Firestore Cloud
+  const handleUploadWorldToCloud = async (w: WorldSaveData, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!fbUser || !isCloudVerified) {
+      onOpenLogin?.();
+      return;
+    }
+    setCloudSyncingId(w.id);
+    try {
+      const synced = await saveWorldToCloud(fbUser, w, getDeviceCategory());
+      worldStorage.saveWorld(synced);
+      refreshWorlds();
+      setCloudNotice(`☁️ 「${synced.name}」已安全上傳並同步至雲端！`);
+      setTimeout(() => setCloudNotice(null), 3500);
+    } catch (err) {
+      setCloudNotice(err instanceof Error ? err.message : '上傳至雲端失敗');
+    } finally {
+      setCloudSyncingId(null);
+    }
+  };
+
   // Handle Create World
-  const handleCreateSubmit = (e: React.FormEvent) => {
+  const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newWorldType === 'fusion' && !isVipActive()) {
       setIsVipModalOpen(true);
       return;
     }
 
-    const created = worldStorage.createWorld({
+    let created = worldStorage.createWorld({
       name: newWorldName,
       gameMode: newGameMode,
       worldType: newWorldType,
       seed: newSeed
     });
+
+    if (fbUser && isCloudVerified) {
+      try {
+        created = await saveWorldToCloud(fbUser, created, getDeviceCategory());
+        worldStorage.saveWorld(created);
+      } catch (err) {
+        console.warn('Initial cloud save failed:', err);
+      }
+    }
+
     refreshWorlds();
     setSelectedWorldId(created.id);
     setIsCreating(false);
@@ -90,8 +200,15 @@ export const WorldSelectModal: React.FC<WorldSelectModalProps> = ({
   };
 
   // Handle Delete
-  const handleDeleteWorld = (id: string) => {
+  const handleDeleteWorld = async (id: string) => {
     worldStorage.deleteWorld(id);
+    if (fbUser && isCloudVerified) {
+      try {
+        await deleteWorldFromCloud(fbUser, id, getDeviceCategory());
+      } catch (err) {
+        console.warn('Cloud world delete failed:', err);
+      }
+    }
     setConfirmDeleteId(null);
     refreshWorlds();
   };
@@ -103,10 +220,17 @@ export const WorldSelectModal: React.FC<WorldSelectModalProps> = ({
     setIsRenaming(true);
   };
 
-  const handleRenameSubmit = (e: React.FormEvent) => {
+  const handleRenameSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedWorld && renameInput.trim()) {
       worldStorage.renameWorld(selectedWorld.id, renameInput);
+      if (fbUser && isCloudVerified) {
+        try {
+          await renameWorldInCloud(fbUser, selectedWorld.id, renameInput);
+        } catch (err) {
+          console.warn('Cloud rename failed:', err);
+        }
+      }
       setIsRenaming(false);
       refreshWorlds();
     }
@@ -369,7 +493,47 @@ export const WorldSelectModal: React.FC<WorldSelectModalProps> = ({
             </form>
           ) : (
             /* VIEW 3: WORLD LIST */
-            <div className="space-y-2">
+            <div className="space-y-2.5">
+              {/* Cloud Auth Status Banner */}
+              <div
+                className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3.5 py-2.5 text-xs ${
+                  isCloudVerified
+                    ? 'border-emerald-500/40 bg-emerald-950/35 text-emerald-200'
+                    : 'border-amber-500/40 bg-amber-950/35 text-amber-200'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  {isCloudVerified ? (
+                    <Cloud className="h-4 w-4 text-emerald-400 shrink-0" />
+                  ) : (
+                    <Lock className="h-4 w-4 text-amber-400 shrink-0" />
+                  )}
+                  <span>
+                    {isCloudVerified
+                      ? `☁️ 已登入 ${fbUser?.displayName || fbUser?.email}，世界進度將安全同步至雲端`
+                      : '目前為訪客模式（僅本機儲存），登入 Google 帳號即可跨裝置保存世界'}
+                  </span>
+                </div>
+                {!isCloudVerified && onOpenLogin && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onOpenLogin();
+                    }}
+                    className="rounded-lg bg-white px-3 py-1.5 text-[11px] font-bold text-stone-900 hover:bg-stone-200 shadow"
+                  >
+                    Google 登入
+                  </button>
+                )}
+              </div>
+
+              {cloudNotice && (
+                <div className="rounded-xl border border-sky-500/50 bg-sky-950/60 px-3.5 py-2 text-xs font-bold text-sky-200">
+                  {cloudNotice}
+                </div>
+              )}
+
               {worlds.map((w) => {
                 const isSelected = w.id === selectedWorldId;
                 return (
@@ -383,7 +547,7 @@ export const WorldSelectModal: React.FC<WorldSelectModalProps> = ({
                     }`}
                   >
                     {/* Left: Icon & Info */}
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
                       <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-stone-600 bg-stone-800 text-2xl shadow-inner">
                         {w.worldType === 'fusion'
                           ? '🌌'
@@ -396,9 +560,9 @@ export const WorldSelectModal: React.FC<WorldSelectModalProps> = ({
                           : '🌲'}
                       </div>
 
-                      <div className="flex flex-col text-left">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm sm:text-base font-bold text-stone-100">
+                      <div className="flex flex-col text-left min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm sm:text-base font-bold text-stone-100 truncate">
                             {w.name}
                           </span>
                           <span
@@ -410,6 +574,16 @@ export const WorldSelectModal: React.FC<WorldSelectModalProps> = ({
                           >
                             {w.gameMode === 'creative' ? '🎨 創造' : '⚔️ 生存'}
                           </span>
+                          {w.cloudSynced ? (
+                            <span className="inline-flex items-center gap-1 rounded bg-sky-500/20 border border-sky-400/50 px-1.5 py-0.2 text-[10px] font-bold text-sky-300">
+                              <Cloud className="h-2.5 w-2.5" />
+                              雲端已同步
+                            </span>
+                          ) : (
+                            <span className="rounded bg-stone-800 border border-stone-600 px-1.5 py-0.2 text-[10px] font-bold text-stone-400">
+                              僅本機
+                            </span>
+                          )}
                           {w.worldType === 'fusion' && (
                             <span className="rounded bg-gradient-to-r from-amber-500 to-amber-600 text-stone-950 px-1.5 py-0.2 text-[9px] font-black shadow-sm">
                               👑 VIP 專屬
@@ -438,8 +612,22 @@ export const WorldSelectModal: React.FC<WorldSelectModalProps> = ({
                       </div>
                     </div>
 
-                    {/* Right: Quick Play or Selected Tick */}
-                    <div className="flex items-center gap-2">
+                    {/* Right: Upload to Cloud / Selected Tick */}
+                    <div className="flex items-center gap-2 shrink-0 ml-2">
+                      {isCloudVerified && !w.cloudSynced && (
+                        <button
+                          type="button"
+                          disabled={cloudSyncingId === w.id}
+                          onClick={(e) => handleUploadWorldToCloud(w, e)}
+                          className="flex items-center gap-1 rounded-lg border border-sky-500/50 bg-sky-950/70 px-2.5 py-1.5 text-[11px] font-bold text-sky-300 hover:bg-sky-900"
+                          title="將此本機世界同步保存至 Firebase 雲端"
+                        >
+                          <UploadCloud className="h-3.5 w-3.5" />
+                          <span className="hidden sm:inline">
+                            {cloudSyncingId === w.id ? '同步中...' : '上傳雲端'}
+                          </span>
+                        </button>
+                      )}
                       {isSelected && (
                         <div className="hidden sm:flex items-center gap-1 text-xs font-bold text-emerald-400">
                           <Check className="h-4 w-4" />

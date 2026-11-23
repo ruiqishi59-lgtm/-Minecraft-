@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { User } from 'firebase/auth';
 import { soundManager } from '../game/audio';
 import { Character3DPreview } from './Character3DPreview';
+import { isVerifiedGoogleUser } from '../firebase';
 
 interface MainMenuProps {
   onOpenWorldSelect: () => void;
@@ -8,18 +10,20 @@ interface MainMenuProps {
   onOpenSkins: () => void;
   onOpenMarket: () => void;
   onOpenMailbox?: () => void;
+  onOpenAuth?: () => void;
+  authUser?: User | null;
   mailboxUnreadCount?: number;
   skinId?: string;
 }
 
 const SPLASH_TEXTS = [
   '正宗 盜版Rickie -2015 經典方塊風格！',
+  '支援 Firebase Google 帳號登入與雲端世界存檔！',
   '全新信箱與意見箱上線：直達作者信箱！',
   '全面適配 iPad 與各類平板觸控操作！',
   '全新生物與生怪蛋系統上線：蜘蛛、終界使者、鐵魔像！',
   '沙漠、雪地、沼澤多樣生態群系上線！',
   '方塊市集限時登場：造型、世界與會員特權！',
-  '支援 3×3 互動工作台合成進階工具與裝飾方塊！',
   '2015 經典懷舊回歸 • 100% WebGL 3D 冒險！'
 ];
 
@@ -29,6 +33,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onOpenSkins,
   onOpenMarket,
   onOpenMailbox,
+  onOpenAuth,
+  authUser,
   mailboxUnreadCount = 0,
   skinId = 'steve'
 }) => {
@@ -44,31 +50,50 @@ export const MainMenu: React.FC<MainMenuProps> = ({
     cb();
   };
 
+  const isSignedIn = isVerifiedGoogleUser(authUser);
+  const displayName = authUser?.displayName || authUser?.email?.split('@')[0] || '冒險家';
+
   return (
     <div
       id="rickie-main-menu"
       className="fixed inset-0 z-40 flex flex-col justify-between p-4 sm:p-6 pt-safe pb-safe bg-gradient-to-b from-black/35 via-black/10 to-black/45 select-none font-mono text-white overflow-y-auto"
     >
-      {/* Top Bar: Classic Block Edition Header + Quick Mailbox */}
-      <div className="w-full flex items-center justify-between gap-2 text-xs text-stone-200 drop-shadow-[2px_2px_0_rgba(0,0,0,0.9)] px-1 sm:px-2">
+      {/* Top Bar: Classic Block Edition Header + Google Auth + Quick Mailbox */}
+      <div className="w-full flex flex-wrap items-center justify-between gap-2 text-xs text-stone-200 drop-shadow-[2px_2px_0_rgba(0,0,0,0.9)] px-1 sm:px-2">
         <span className="font-bold tracking-wider text-stone-100">
           盜版Rickie -2015 (體素 3D 版)
         </span>
-        {onOpenMailbox && (
-          <button
-            type="button"
-            id="main-menu-btn-mailbox-top"
-            onClick={() => handlePress(onOpenMailbox)}
-            className="flex min-h-[44px] items-center gap-1.5 rounded-none border-2 border-black bg-[#3b6998] hover:bg-[#497db2] active:bg-[#2d5175] px-3.5 py-1.5 text-xs font-bold text-white shadow-[inset_2px_2px_0_#6ca3db,inset_-2px_-3px_0_#1e3a57,0_3px_0_rgba(0,0,0,0.55)] cursor-pointer"
-          >
-            <span>📬 信箱・意見箱</span>
-            {mailboxUnreadCount > 0 && (
-              <span className="bg-rose-600 border border-black px-1.5 py-0.5 text-[10px] font-black text-white tabular-nums">
-                {mailboxUnreadCount}
-              </span>
-            )}
-          </button>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {onOpenAuth && (
+            <button
+              type="button"
+              id="main-menu-btn-auth-top"
+              onClick={() => handlePress(onOpenAuth)}
+              className={`flex min-h-[44px] items-center gap-1.5 rounded-none border-2 border-black px-3.5 py-1.5 text-xs font-bold text-white cursor-pointer ${
+                isSignedIn
+                  ? 'bg-[#2e6f40] hover:bg-[#3a874f] active:bg-[#225430] shadow-[inset_2px_2px_0_#59b372,inset_-2px_-3px_0_#194024,0_3px_0_rgba(0,0,0,0.55)]'
+                  : 'bg-[#5a5a5a] hover:bg-[#6e6e6e] active:bg-[#444444] shadow-[inset_2px_2px_0_#8e8e8e,inset_-2px_-3px_0_#2b2b2b,0_3px_0_rgba(0,0,0,0.55)]'
+              }`}
+            >
+              <span>{isSignedIn ? `☁️ ${displayName}` : '🔐 Google 登入 / 雲端存檔'}</span>
+            </button>
+          )}
+          {onOpenMailbox && (
+            <button
+              type="button"
+              id="main-menu-btn-mailbox-top"
+              onClick={() => handlePress(onOpenMailbox)}
+              className="flex min-h-[44px] items-center gap-1.5 rounded-none border-2 border-black bg-[#3b6998] hover:bg-[#497db2] active:bg-[#2d5175] px-3.5 py-1.5 text-xs font-bold text-white shadow-[inset_2px_2px_0_#6ca3db,inset_-2px_-3px_0_#1e3a57,0_3px_0_rgba(0,0,0,0.55)] cursor-pointer"
+            >
+              <span>📬 信箱・意見箱</span>
+              {mailboxUnreadCount > 0 && (
+                <span className="bg-rose-600 border border-black px-1.5 py-0.5 text-[10px] font-black text-white tabular-nums">
+                  {mailboxUnreadCount}
+                </span>
+              )}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Main Content: Left = Classic Block Stone Logo + Buttons, Right = 3D Character */}

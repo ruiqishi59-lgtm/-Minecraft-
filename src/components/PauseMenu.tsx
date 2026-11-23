@@ -14,6 +14,8 @@ interface PauseMenuProps {
   onOpenMarket?: () => void;
   onOpenAIGuide?: () => void;
   onOpenMailbox?: () => void;
+  onOpenGoogleAccount?: () => void;
+  isCloudSignedIn?: boolean;
   mailboxUnreadCount?: number;
   currentDimension?: 'default' | 'heaven';
   onToggleGameMode?: () => void;
@@ -37,6 +39,8 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   onOpenMarket,
   onOpenAIGuide,
   onOpenMailbox,
+  onOpenGoogleAccount,
+  isCloudSignedIn = false,
   mailboxUnreadCount = 0,
   currentDimension = 'default',
   onToggleGameMode,
@@ -230,12 +234,14 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
             {saveSuccess ? (
               <>
                 <Check className="h-4 w-4 text-emerald-300" />
-                <span className="text-emerald-200">存檔已保存！</span>
+                <span className="text-emerald-200">
+                  {isCloudSignedIn ? '已同步至雲端！' : '本機存檔已保存！'}
+                </span>
               </>
             ) : (
               <>
                 <Sparkles className="h-4 w-4 text-neutral-300" />
-                <span>保存世界存檔</span>
+                <span>{isCloudSignedIn ? '保存並同步雲端' : '保存世界存檔'}</span>
               </>
             )}
           </button>
@@ -250,22 +256,41 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
           </button>
         </div>
 
-        {/* Row 6: Mailbox & Feedback Box */}
-        {onOpenMailbox && (
-          <button
-            id="pause-btn-mailbox"
-            onClick={() => handleAction(onOpenMailbox)}
-            className="w-full min-h-[46px] py-3 px-4 flex items-center justify-center gap-2 bg-[#233d5c] hover:bg-[#2d4e75] border-t-2 border-l-2 border-sky-400/80 border-b-2 border-r-2 border-black text-sky-100 font-mono font-bold text-xs sm:text-sm tracking-wider transition-colors shadow-lg active:translate-y-[1px]"
-          >
-            <Mail className="h-4 w-4 text-sky-300" />
-            <span>信箱與意見箱（給 Rickie 的意見）</span>
-            {mailboxUnreadCount > 0 && (
-              <span className="rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-black text-white tabular-nums">
-                {mailboxUnreadCount}
+        {/* Row 6: Mailbox & Account Cloud Sync */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          {onOpenMailbox && (
+            <button
+              id="pause-btn-mailbox"
+              onClick={() => handleAction(onOpenMailbox)}
+              className="w-full min-h-[46px] py-3 px-3 flex items-center justify-center gap-2 bg-[#233d5c] hover:bg-[#2d4e75] border-t-2 border-l-2 border-sky-400/80 border-b-2 border-r-2 border-black text-sky-100 font-mono font-bold text-xs tracking-wider transition-colors shadow-lg active:translate-y-[1px]"
+            >
+              <Mail className="h-4 w-4 text-sky-300 shrink-0" />
+              <span className="truncate">信箱與意見箱</span>
+              {mailboxUnreadCount > 0 && (
+                <span className="rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-black text-white tabular-nums">
+                  {mailboxUnreadCount}
+                </span>
+              )}
+            </button>
+          )}
+
+          {onOpenGoogleAccount && (
+            <button
+              id="pause-btn-google-account"
+              onClick={() => handleAction(onOpenGoogleAccount)}
+              className={`w-full min-h-[46px] py-3 px-3 flex items-center justify-center gap-1.5 border-t-2 border-l-2 border-b-2 border-r-2 border-black font-mono font-bold text-xs tracking-wider transition-colors shadow-lg active:translate-y-[1px] ${
+                isCloudSignedIn
+                  ? 'bg-emerald-950/90 hover:bg-emerald-900 border-t-emerald-400 border-l-emerald-400 text-emerald-200'
+                  : 'bg-blue-950/90 hover:bg-blue-900 border-t-blue-400 border-l-blue-400 text-blue-200'
+              }`}
+            >
+              <Shield className="h-4 w-4 shrink-0" />
+              <span className="truncate">
+                {isCloudSignedIn ? 'Google 帳號安全中心' : '登入 Google 同步雲端'}
               </span>
-            )}
-          </button>
-        )}
+            </button>
+          )}
+        </div>
 
         {/* Row 7: Save & Quit to Title / Exit World */}
         <button

@@ -16,11 +16,15 @@ service cloud.firestore {
     }
 
     function isVerified() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+      return isSignedIn() &&
+        request.auth.token.email_verified == true &&
+        request.auth.token.firebase.sign_in_provider == 'google.com' &&
+        request.auth.token.email is string;
     }
 
     function isAdmin() {
-      return isVerified() && request.auth.token.email == 'ruiqishi59@gmail.com';
+      return isVerified() &&
+        request.auth.token.email.lower() == 'ruiqishi59@gmail.com';
     }
 
     function incoming() {
@@ -39,9 +43,144 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]*$');
     }
 
+    function isValidEmail(email) {
+      return email is string &&
+        email.size() >= 3 &&
+        email.size() <= 160 &&
+        email.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$');
+    }
+
     // ------------------------------------------------------------
     // Entity Validation Blueprints
     // ------------------------------------------------------------
+    function isValidUserSecurityProfile(data) {
+      return data.keys().hasAll([
+        'uid',
+        'email',
+        'autoLockMinutes',
+        'requireReauthForSensitiveActions',
+        'lastVerifiedDevice',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'uid',
+        'email',
+        'autoLockMinutes',
+        'requireReauthForSensitiveActions',
+        'lastVerifiedDevice',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      isValidId(data.uid) &&
+      isValidEmail(data.email) &&
+      data.autoLockMinutes is int &&
+      data.autoLockMinutes in [0, 5, 10, 30] &&
+      data.requireReauthForSensitiveActions is bool &&
+      data.lastVerifiedDevice in ['tablet', 'mobile', 'desktop'] &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidSecurityLog(data) {
+      return data.keys().hasAll([
+        'uid',
+        'eventType',
+        'deviceType',
+        'detail',
+        'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'uid',
+        'eventType',
+        'deviceType',
+        'detail',
+        'createdAt'
+      ]) &&
+      isValidId(data.uid) &&
+      data.eventType in [
+        'sign_in',
+        'reauth_verified',
+        'gmail_send',
+        'admin_mail',
+        'token_revoked',
+        'settings_updated',
+        'world_cloud_save',
+        'world_cloud_delete'
+      ] &&
+      data.deviceType in ['tablet', 'mobile', 'desktop'] &&
+      data.detail is string && data.detail.size() >= 1 && data.detail.size() <= 200 &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidWorldPlayer(p) {
+      return p is map &&
+        p.keys().hasAll(['x', 'y', 'z', 'yaw', 'pitch', 'health', 'hunger', 'gameMode', 'inventory']) &&
+        p.keys().hasOnly(['x', 'y', 'z', 'yaw', 'pitch', 'health', 'hunger', 'gameMode', 'inventory']) &&
+        p.x is number &&
+        p.y is number &&
+        p.z is number &&
+        p.yaw is number &&
+        p.pitch is number &&
+        p.health is number && p.health >= 0 && p.health <= 20 &&
+        p.hunger is number && p.hunger >= 0 && p.hunger <= 20 &&
+        p.gameMode in ['survival', 'creative'] &&
+        p.inventory is list &&
+        p.inventory.size() <= 36 &&
+        (p.inventory.size() == 0 || p.inventory[0] == null || p.inventory[0] is map);
+    }
+
+    function isValidWorldSave(data) {
+      return data.keys().hasAll([
+        'id',
+        'uid',
+        'version',
+        'name',
+        'gameMode',
+        'difficulty',
+        'worldType',
+        'seed',
+        'timeOfDay',
+        'weather',
+        'player',
+        'modifiedBlocks',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'id',
+        'uid',
+        'version',
+        'name',
+        'gameMode',
+        'difficulty',
+        'worldType',
+        'seed',
+        'timeOfDay',
+        'weather',
+        'player',
+        'modifiedBlocks',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      isValidId(data.id) &&
+      isValidId(data.uid) &&
+      data.version is int &&
+      data.version == 1 &&
+      data.name is string && data.name.size() >= 1 && data.name.size() <= 64 &&
+      data.gameMode in ['survival', 'creative'] &&
+      data.difficulty in ['peaceful', 'easy', 'normal', 'hard'] &&
+      data.worldType in ['default', 'flat', 'mountains', 'heaven', 'fusion'] &&
+      data.seed is int &&
+      data.timeOfDay is number && data.timeOfDay >= 0 && data.timeOfDay <= 1 &&
+      data.weather in ['clear', 'rain', 'thunder'] &&
+      isValidWorldPlayer(data.player) &&
+      data.modifiedBlocks is map &&
+      data.modifiedBlocks.size() <= 15000 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
     function isValidFeedback(data) {
       return data.keys().hasAll([
         'senderUid',
@@ -73,7 +212,7 @@ service cloud.firestore {
       ]) &&
       isValidId(data.senderUid) &&
       data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 64 &&
-      data.senderEmail is string && data.senderEmail.size() >= 3 && data.senderEmail.size() <= 160 &&
+      isValidEmail(data.senderEmail) &&
       data.category in ['suggestion', 'bug', 'balance', 'other'] &&
       data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 120 &&
       data.message is string && data.message.size() >= 1 && data.message.size() <= 2000 &&
@@ -116,8 +255,8 @@ service cloud.firestore {
       ]) &&
       data.recipientType in ['direct', 'broadcast'] &&
       isValidOptionalId(data.recipientUid) &&
-      data.recipientEmail is string && data.recipientEmail.size() >= 3 && data.recipientEmail.size() <= 160 &&
-      data.senderEmail is string && data.senderEmail.size() >= 3 && data.senderEmail.size() <= 160 &&
+      (data.recipientEmail == 'ALL' || isValidEmail(data.recipientEmail)) &&
+      isValidEmail(data.senderEmail) &&
       data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 64 &&
       data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
       data.body is string && data.body.size() >= 1 && data.body.size() <= 2000 &&
@@ -126,6 +265,120 @@ service cloud.firestore {
       data.isRead is bool &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
+    }
+
+    // ------------------------------------------------------------
+    // Collection: /users/{userId} (PII Isolated, Zero Enumeration)
+    // ------------------------------------------------------------
+    match /users/{userId} {
+      allow get: if isVerified() &&
+        isValidId(userId) &&
+        request.auth.uid == userId;
+
+      // Prevent account enumeration across users
+      allow list: if false;
+
+      allow create: if isVerified() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidUserSecurityProfile(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().email.lower() == request.auth.token.email.lower() &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerified() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidUserSecurityProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'autoLockMinutes',
+          'requireReauthForSensitiveActions',
+          'lastVerifiedDevice',
+          'updatedAt'
+        ]);
+
+      allow delete: if false;
+
+      // Subcollection: /users/{userId}/security_logs/{logId} (Append-only Audit Trail)
+      match /security_logs/{logId} {
+        allow get: if isVerified() &&
+          isValidId(userId) &&
+          isValidId(logId) &&
+          request.auth.uid == userId;
+
+        allow list: if isVerified() &&
+          request.auth.uid == userId &&
+          resource.data.uid == request.auth.uid;
+
+        allow create: if isVerified() &&
+          isValidId(userId) &&
+          isValidId(logId) &&
+          request.auth.uid == userId &&
+          isValidSecurityLog(incoming()) &&
+          incoming().uid == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          exists(/databases/$(database)/documents/users/$(userId)) &&
+          get(/databases/$(database)/documents/users/$(userId)).data.uid == request.auth.uid;
+
+        // Audit logs are immutable to prevent attackers from covering tracks
+        allow update, delete: if false;
+      }
+
+      // Subcollection: /users/{userId}/worlds/{worldId} (Owner-Only Cloud World Saves)
+      match /worlds/{worldId} {
+        allow get: if isVerified() &&
+          isValidId(userId) &&
+          isValidId(worldId) &&
+          request.auth.uid == userId;
+
+        allow list: if isVerified() &&
+          request.auth.uid == userId &&
+          resource.data.uid == request.auth.uid;
+
+        allow create: if isVerified() &&
+          isValidId(userId) &&
+          isValidId(worldId) &&
+          request.auth.uid == userId &&
+          isValidWorldSave(incoming()) &&
+          incoming().uid == request.auth.uid &&
+          incoming().id == worldId &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/users/$(userId)) &&
+          get(/databases/$(database)/documents/users/$(userId)).data.uid == request.auth.uid;
+
+        allow update: if isVerified() &&
+          isValidId(userId) &&
+          isValidId(worldId) &&
+          request.auth.uid == userId &&
+          isValidWorldSave(incoming()) &&
+          incoming().uid == existing().uid &&
+          incoming().id == existing().id &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name',
+            'gameMode',
+            'difficulty',
+            'worldType',
+            'timeOfDay',
+            'weather',
+            'player',
+            'modifiedBlocks',
+            'updatedAt'
+          ]);
+
+        allow delete: if isVerified() &&
+          isValidId(userId) &&
+          isValidId(worldId) &&
+          request.auth.uid == userId &&
+          existing().uid == request.auth.uid;
+      }
     }
 
     // ------------------------------------------------------------
@@ -146,7 +399,7 @@ service cloud.firestore {
         isValidId(feedbackId) &&
         isValidFeedback(incoming()) &&
         incoming().senderUid == request.auth.uid &&
-        incoming().senderEmail == request.auth.token.email &&
+        incoming().senderEmail.lower() == request.auth.token.email.lower() &&
         incoming().status == 'unread' &&
         incoming().adminReply == '' &&
         incoming().createdAt == request.time &&
@@ -178,7 +431,7 @@ service cloud.firestore {
         (isVerified() && (
           existing().recipientType == 'broadcast' ||
           existing().recipientUid == request.auth.uid ||
-          existing().recipientEmail == request.auth.token.email
+          existing().recipientEmail.lower() == request.auth.token.email.lower()
         ))
       );
 
@@ -194,7 +447,7 @@ service cloud.firestore {
       allow create: if isAdmin() &&
         isValidId(messageId) &&
         isValidMailboxMessage(incoming()) &&
-        incoming().senderEmail == 'ruiqishi59@gmail.com' &&
+        incoming().senderEmail.lower() == 'ruiqishi59@gmail.com' &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time;
 
@@ -209,7 +462,7 @@ service cloud.firestore {
         incoming().updatedAt == request.time && (
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'body', 'isRead', 'updatedAt'])) ||
           (existing().recipientType == 'direct' &&
-            (existing().recipientUid == request.auth.uid || existing().recipientEmail == request.auth.token.email) &&
+            (existing().recipientUid == request.auth.uid || existing().recipientEmail.lower() == request.auth.token.email.lower()) &&
             incoming().diff(existing()).affectedKeys().hasOnly(['isRead', 'updatedAt']))
         );
 
@@ -217,7 +470,7 @@ service cloud.firestore {
         isAdmin() ||
         (isVerified() &&
           existing().recipientType == 'direct' &&
-          (existing().recipientUid == request.auth.uid || existing().recipientEmail == request.auth.token.email))
+          (existing().recipientUid == request.auth.uid || existing().recipientEmail.lower() == request.auth.token.email.lower()))
       );
     }
   }

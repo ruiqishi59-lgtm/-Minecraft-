@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -126,14 +127,37 @@ function initDefaultRooms() {
 
 initDefaultRooms();
 
+const sanitizeText = (val: unknown, fallback: string, maxLen: number): string => {
+  if (typeof val !== 'string') return fallback;
+  const cleaned = val.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, maxLen);
+  return cleaned || fallback;
+};
+
+const clampNumber = (val: unknown, fallback: number, min: number, max: number): number => {
+  if (typeof val !== 'number' || !Number.isFinite(val)) return fallback;
+  return Math.max(min, Math.min(max, val));
+};
+
+const ALLOWED_WORLD_TYPES = new Set(['default', 'flat', 'mountains', 'heaven', 'fusion']);
+const ALLOWED_GAME_MODES = new Set(['survival', 'creative']);
+
 async function startServer() {
   const app = express();
   const server = http.createServer(app);
 
-  app.use(express.json());
+  // Security headers middleware
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    next();
+  });
 
-  // WebSocket Server Setup
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  app.use(express.json({ limit: '64kb' }));
+
+  // WebSocket Server Setup with strict payload cap
+  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16 * 1024 });
 
   wss.on('connection', (ws) => {
     let currentRoomId: string | null = null;
@@ -142,14 +166,19 @@ async function startServer() {
     ws.on('message', (data) => {
       try {
         const msg = JSON.parse(data.toString());
+        if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
 
         if (msg.type === 'join_server') {
-          const { serverId, playerName, skinId, playerPos, playerStats } = msg;
-          let room = gameRooms.get(serverId);
+          const requestedServerId = sanitizeText(msg.serverId, '', 64);
+          if (!requestedServerId) return;
+
+          const safePlayerName = sanitizeText(msg.playerName, '冒險家', 32);
+          const safeSkinId = sanitizeText(msg.skinId, 'steve', 40).replace(/[^a-zA-Z0-9_-]/g, '') || 'steve';
+
+          let room = gameRooms.get(requestedServerId);
           if (!room) {
-            // Check if serverId matches any roomCode
             for (const r of gameRooms.values()) {
-              if (r.roomCode && r.roomCode.toLowerCase() === serverId.toLowerCase()) {
+              if (r.roomCode && r.roomCode.toLowerCase() === requestedServerId.toLowerCase()) {
                 room = r;
                 break;
               }
@@ -157,20 +186,25 @@ async function startServer() {
           }
 
           if (!room) {
-            // Auto create custom room if code format like ROOM-xxxx or custom id
-            const customCode = serverId.toUpperCase();
+            if (gameRooms.size >= 100) {
+              ws.send(JSON.stringify({ type: 'error', message: '伺服器房間數量已達上限' }));
+              return;
+            }
+            const customCode = requestedServerId.toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 24) || 'ROOM';
+            const wt = typeof msg.worldType === 'string' && ALLOWED_WORLD_TYPES.has(msg.worldType) ? msg.worldType : 'default';
+            const gm = typeof msg.gameMode === 'string' && ALLOWED_GAME_MODES.has(msg.gameMode) ? msg.gameMode : 'survival';
             room = {
               id: `custom_${customCode}`,
               name: `自訂房間 [${customCode}]`,
               ip: `custom.mineclone.net:${Math.floor(Math.random() * 9000 + 20000)}`,
-              motd: `玩家 ${playerName || '冒險家'} 創建的線上多人房間`,
-              worldType: msg.worldType || 'default',
-              gameMode: msg.gameMode || 'survival',
-              seed: msg.seed || Math.floor(Math.random() * 999999),
+              motd: `玩家 ${safePlayerName} 創建的線上多人房間`,
+              worldType: wt as GameRoom['worldType'],
+              gameMode: gm as GameRoom['gameMode'],
+              seed: typeof msg.seed === 'number' && Number.isFinite(msg.seed) ? Math.floor(msg.seed) : Math.floor(Math.random() * 999999),
               maxPlayers: 20,
               isPrivate: true,
               roomCode: customCode,
-              creatorName: playerName || '房主',
+              creatorName: safePlayerName,
               icon: '🎮',
               tags: ['私人房間', '好友同樂'],
               players: new Map(),
@@ -180,20 +214,26 @@ async function startServer() {
             gameRooms.set(room.id, room);
           }
 
+          if (room.players.size >= room.maxPlayers) {
+            ws.send(JSON.stringify({ type: 'error', message: '房間人數已滿' }));
+            return;
+          }
+
           currentRoomId = room.id;
-          const assignedPlayerId: string = msg.playerId || `p_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+          // Always generate playerId server-side so clients cannot hijack another player's session
+          const assignedPlayerId = `p_${randomUUID()}`;
           currentPlayerId = assignedPlayerId;
 
           const newPlayer: RoomPlayer = {
             id: assignedPlayerId,
-            name: playerName || '冒險家',
-            skinId: skinId || 'steve',
-            x: playerPos?.x ?? 0,
-            y: playerPos?.y ?? 16,
-            z: playerPos?.z ?? 0,
-            yaw: playerPos?.yaw ?? 0,
-            pitch: playerPos?.pitch ?? 0,
-            health: playerStats?.health ?? 20,
+            name: safePlayerName,
+            skinId: safeSkinId,
+            x: clampNumber(msg.playerPos?.x, 0, -10000, 10000),
+            y: clampNumber(msg.playerPos?.y, 16, -256, 512),
+            z: clampNumber(msg.playerPos?.z, 0, -10000, 10000),
+            yaw: clampNumber(msg.playerPos?.yaw, 0, -100, 100),
+            pitch: clampNumber(msg.playerPos?.pitch, 0, -10, 10),
+            health: clampNumber(msg.playerStats?.health, 20, 0, 20),
             isSwinging: false,
             isSneaking: false,
             isFlying: false,
@@ -275,12 +315,12 @@ async function startServer() {
           const player = room.players.get(currentPlayerId);
           if (!player) return;
 
-          player.x = msg.x;
-          player.y = msg.y;
-          player.z = msg.z;
-          player.yaw = msg.yaw;
-          player.pitch = msg.pitch;
-          player.health = msg.health ?? player.health;
+          player.x = clampNumber(msg.x, player.x, -10000, 10000);
+          player.y = clampNumber(msg.y, player.y, -256, 512);
+          player.z = clampNumber(msg.z, player.z, -10000, 10000);
+          player.yaw = clampNumber(msg.yaw, player.yaw, -100, 100);
+          player.pitch = clampNumber(msg.pitch, player.pitch, -10, 10);
+          player.health = clampNumber(msg.health, player.health, 0, 20);
           player.isSwinging = Boolean(msg.isSwinging);
           player.isSneaking = Boolean(msg.isSneaking);
           player.isFlying = Boolean(msg.isFlying);
@@ -305,19 +345,31 @@ async function startServer() {
             }
           });
         } else if (msg.type === 'block_change') {
-          if (!currentRoomId) return;
+          if (!currentRoomId || !currentPlayerId) return;
           const room = gameRooms.get(currentRoomId);
           if (!room) return;
 
-          const key = `${Math.floor(msg.x)},${Math.floor(msg.y)},${Math.floor(msg.z)}`;
-          room.worldModifications[key] = msg.blockType;
+          if (
+            typeof msg.x !== 'number' || !Number.isFinite(msg.x) ||
+            typeof msg.y !== 'number' || !Number.isFinite(msg.y) ||
+            typeof msg.z !== 'number' || !Number.isFinite(msg.z)
+          ) {
+            return;
+          }
+          const bx = Math.floor(clampNumber(msg.x, 0, -2048, 2048));
+          const by = Math.floor(clampNumber(msg.y, 0, -64, 256));
+          const bz = Math.floor(clampNumber(msg.z, 0, -2048, 2048));
+          const safeBlockType = sanitizeText(msg.blockType, 'air', 32).replace(/[^a-zA-Z0-9_]/g, '') || 'air';
+
+          const key = `${bx},${by},${bz}`;
+          room.worldModifications[key] = safeBlockType;
 
           const blockBroadcast = JSON.stringify({
             type: 'block_changed',
-            x: msg.x,
-            y: msg.y,
-            z: msg.z,
-            blockType: msg.blockType,
+            x: bx,
+            y: by,
+            z: bz,
+            blockType: safeBlockType,
             changedBy: currentPlayerId
           });
 
@@ -333,11 +385,14 @@ async function startServer() {
           const player = room.players.get(currentPlayerId);
           if (!player) return;
 
+          const safeChatMsg = sanitizeText(msg.message, '', 150);
+          if (!safeChatMsg) return;
+
           const chat = {
             id: `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
             senderId: currentPlayerId,
             senderName: player.name,
-            message: String(msg.message).slice(0, 150),
+            message: safeChatMsg,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             isSystem: false
           };
@@ -419,22 +474,39 @@ async function startServer() {
   });
 
   app.post('/api/servers/create', (req, res) => {
-    const { name, worldType = 'default', gameMode = 'survival', creatorName = '房主', isPrivate = false } = req.body;
+    if (gameRooms.size >= 100) {
+      return res.status(429).json({ error: '房間數量已達伺服器上限' });
+    }
+    const rawBody = req.body && typeof req.body === 'object' ? req.body : {};
+    const safeName = sanitizeText(rawBody.name, '', 48);
+    const safeCreator = sanitizeText(rawBody.creatorName, '房主', 32);
+    const worldType = (
+      typeof rawBody.worldType === 'string' && ALLOWED_WORLD_TYPES.has(rawBody.worldType)
+        ? rawBody.worldType
+        : 'default'
+    ) as GameRoom['worldType'];
+    const gameMode = (
+      typeof rawBody.gameMode === 'string' && ALLOWED_GAME_MODES.has(rawBody.gameMode)
+        ? rawBody.gameMode
+        : 'survival'
+    ) as GameRoom['gameMode'];
+    const isPrivate = Boolean(rawBody.isPrivate);
+
     const roomCode = `ROOM-${Math.floor(Math.random() * 8999 + 1000)}`;
     const id = `custom_${roomCode}`;
     const newRoom: GameRoom = {
       id,
-      name: name || `自訂房間 [${roomCode}]`,
+      name: safeName || `自訂房間 [${roomCode}]`,
       ip: `custom.mineclone.net:${Math.floor(Math.random() * 9000 + 20000)}`,
-      motd: `${creatorName} 的多人冒險房間！歡迎大家一起來蓋建築打怪！`,
+      motd: `${safeCreator} 的多人冒險房間！歡迎大家一起來蓋建築打怪！`,
       worldType,
       gameMode,
       seed: Math.floor(Math.random() * 999999),
       maxPlayers: 20,
       isOfficial: false,
-      isPrivate: Boolean(isPrivate),
+      isPrivate,
       roomCode,
-      creatorName,
+      creatorName: safeCreator,
       icon: worldType === 'heaven' ? '☁️' : (worldType === 'flat' ? '🟩' : '🌲'),
       tags: ['自訂服', gameMode === 'creative' ? '創造' : '生存', '多人連線'],
       players: new Map(),
@@ -474,9 +546,14 @@ async function startServer() {
   // Game AI Guide API endpoint
   app.post('/api/chat-ai-guide', async (req, res) => {
     try {
-      const { message, history } = req.body;
-      if (!message || typeof message !== 'string') {
+      const rawMessage = req.body?.message;
+      const history = req.body?.history;
+      if (!rawMessage || typeof rawMessage !== 'string') {
         return res.status(400).json({ error: 'Message is required' });
+      }
+      const message = sanitizeText(rawMessage, '', 1000);
+      if (!message) {
+        return res.status(400).json({ error: 'Message cannot be empty' });
       }
 
       const client = getAIClient();
@@ -500,12 +577,12 @@ async function startServer() {
    - 創造模式：無限方塊供給，無生命飢餓限制，雙擊空白鍵即可切換自由飛行！
 4. 操作控制：
    - 電腦模式：[W][A][S][D] 移動，[空白鍵] 跳躍，數字鍵 [1]-[9] 或滾輪切換快捷欄，滑鼠 [左鍵] 挖掘/攻擊，滑鼠 [右鍵] 放置方塊/吃食物/與村民交易，[E] 開啟背包，[ESC] 暫停選單。
-   - 手機模式：點擊頂部或選單中的手機模式開關，即可開啟虛擬觸控搖桿、跳躍、挖掘、放置、飛行與視角滑動按鍵。
+   - 手機與平板模式：點擊頂部或選單中的觸控模式開關，即可開啟虛擬觸控搖桿、跳躍、挖掘、放置、飛行與視角滑動按鍵。
 5. 經濟與市集 (Marketplace)：
    - 設有積分商城，積分額度由 100 ～ 10,000 點，價格由 100 ～ 400 NT$。
    - 玩家可購買積分並在市集中兌換「天堂水晶神鎬」、「熾焰以太聖劍」、「天使飛行羽翼」與「終極資源箱」等強大福利。
 6. 帳號與存檔：
-   - 支援 Google 帳號登入，雲端同步個人積分、購買項目，並支援將世界存檔無縫備份至 Google Drive 或匯出 JSON 檔。
+   - 支援 Google 帳號登入，保障安全驗證與信箱/意見箱功能，並支援將世界存檔匯出 JSON 備份檔。
 
 【回答風格要求】：
 - 語氣親切、專業、富有冒險精神。
@@ -513,14 +590,18 @@ async function startServer() {
 - 如果玩家詢問新手攻略，給出清晰的「第 1 天生存清單」；如果問天堂世界，介紹浮島與飛行特色；如果問操作或市集，詳細引導按鍵與功能。`;
 
       if (client) {
-        // Construct conversation contents with history if available
-        const contents: any[] = [];
+        const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
         if (Array.isArray(history)) {
-          for (const item of history) {
-            contents.push({
-              role: item.role === 'model' ? 'model' : 'user',
-              parts: [{ text: item.text }]
-            });
+          for (const item of history.slice(-6)) {
+            if (item && typeof item.text === 'string') {
+              const safeHistText = sanitizeText(item.text, '', 1000);
+              if (safeHistText) {
+                contents.push({
+                  role: item.role === 'model' ? 'model' : 'user',
+                  parts: [{ text: safeHistText }]
+                });
+              }
+            }
           }
         }
         contents.push({
@@ -625,11 +706,10 @@ async function startServer() {
       }
 
       return res.json({ reply: fallbackReply });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('AI Guide error:', error);
       return res.status(500).json({
-        error: 'Failed to process AI guide request',
-        details: error?.message
+        error: 'Failed to process AI guide request'
       });
     }
   });

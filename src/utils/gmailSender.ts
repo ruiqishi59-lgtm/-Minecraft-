@@ -10,6 +10,10 @@ export interface FeedbackEmailPayload {
   feedbackId?: string;
 }
 
+function stripHeaderControlChars(value: string, maxLen: number): string {
+  return value.replace(/[\r\n\x00-\x1f\x7f]/g, ' ').trim().slice(0, maxLen);
+}
+
 function encodeUtf8ToBase64Url(input: string): string {
   const bytes = new TextEncoder().encode(input);
   let binary = '';
@@ -20,7 +24,8 @@ function encodeUtf8ToBase64Url(input: string): string {
 }
 
 function encodeMimeHeader(value: string): string {
-  const bytes = new TextEncoder().encode(value);
+  const safe = stripHeaderControlChars(value, 180);
+  const bytes = new TextEncoder().encode(safe);
   let binary = '';
   for (let i = 0; i < bytes.length; i++) {
     binary += String.fromCharCode(bytes[i]);
@@ -39,21 +44,30 @@ export async function sendFeedbackViaGmail(
       ? '手機觸控設備 (Mobile)'
       : '電腦鍵鼠 (Desktop)';
 
-  const emailSubject = `[盜版Rickie -2015 意見箱] [${payload.categoryLabel}] ${payload.subject}`;
+  const safeSenderName = stripHeaderControlChars(payload.senderName, 64);
+  const safeSenderEmail = stripHeaderControlChars(payload.senderEmail, 160);
+  const safeCategoryLabel = stripHeaderControlChars(payload.categoryLabel, 32);
+  const safeSubject = stripHeaderControlChars(payload.subject, 120);
+  const safeMessage = payload.message.replace(/\x00/g, '').trim().slice(0, 2000);
+  const safeFeedbackId = payload.feedbackId
+    ? stripHeaderControlChars(payload.feedbackId, 128)
+    : undefined;
+
+  const emailSubject = `[盜版Rickie -2015 意見箱] [${safeCategoryLabel}] ${safeSubject}`;
   const bodyLines = [
     '您好 Rickie 管理員 (ruiqishi59@gmail.com)：',
     '',
     '玩家透過遊戲內「意見箱」提交了新的回饋訊息：',
     '----------------------------------------',
-    `• 玩家名稱：${payload.senderName}`,
-    `• 玩家信箱：${payload.senderEmail}`,
-    `• 意見分類：${payload.categoryLabel}`,
+    `• 玩家名稱：${safeSenderName}`,
+    `• 玩家信箱：${safeSenderEmail}`,
+    `• 意見分類：${safeCategoryLabel}`,
     `• 遊玩裝置：${deviceLabel}`,
-    ...(payload.feedbackId ? [`• 意見編號：${payload.feedbackId}`] : []),
-    `• 回饋主旨：${payload.subject}`,
+    ...(safeFeedbackId ? [`• 意見編號：${safeFeedbackId}`] : []),
+    `• 回饋主旨：${safeSubject}`,
     '----------------------------------------',
     '',
-    payload.message,
+    safeMessage,
     '',
     '---',
     '此郵件由 盜版Rickie -2015 遊戲內意見箱經使用者確認授權後寄出。'
@@ -88,23 +102,27 @@ export async function sendFeedbackViaGmail(
   );
 
   if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gmail 寄送失敗 (${response.status}): ${errText}`);
+    throw new Error(`Gmail 寄送失敗 (${response.status})，請重新驗證授權後再試。`);
   }
 
   return response.json();
 }
 
 export function buildFeedbackMailtoUrl(payload: FeedbackEmailPayload): string {
+  const safeCategoryLabel = stripHeaderControlChars(payload.categoryLabel, 32);
+  const safeSubject = stripHeaderControlChars(payload.subject, 120);
+  const safeSenderName = stripHeaderControlChars(payload.senderName, 64);
+  const safeMessage = payload.message.replace(/\x00/g, '').trim().slice(0, 2000);
+
   const subject = encodeURIComponent(
-    `[盜版Rickie -2015 意見箱] [${payload.categoryLabel}] ${payload.subject}`
+    `[盜版Rickie -2015 意見箱] [${safeCategoryLabel}] ${safeSubject}`
   );
   const body = encodeURIComponent(
     [
-      `玩家名稱：${payload.senderName}`,
+      `玩家名稱：${safeSenderName}`,
       `遊玩裝置：${payload.deviceType}`,
       '',
-      payload.message
+      safeMessage
     ].join('\n')
   );
   return `mailto:${ADMIN_EMAIL}?subject=${subject}&body=${body}`;
